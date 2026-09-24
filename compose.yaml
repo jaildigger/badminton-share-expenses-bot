@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/badminton.sqlite3
+    volumes:
+      - bot-data:/app/data
+    restart: unless-stopped
+volumes:
+  bot-data:
