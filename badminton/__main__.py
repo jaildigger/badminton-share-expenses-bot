@@ -4,12 +4,15 @@ import logging
 import os
 import re
 import time
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from .bot import Bot
 from .store import Store
 from .telegram import Telegram, TelegramError
 from . import publishing
+from .access import Membership
 
 
 def load_env(path):
@@ -77,12 +80,18 @@ def main():
     except BlockingIOError:
         parser.exit(2, "Бот с этой базой уже запущен.\n")
     store = Store(path)
-    store.seed_defaults(admins)
+    if store.setting("shared_workspace") != "1":
+        backup_path = path.with_name(path.stem + ".before-shared-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".sqlite3")
+        with sqlite3.connect(str(backup_path)) as backup:
+            store.db.backup(backup)
+        store.initialize_shared()
+    store.seed_defaults({0})
     bot = Bot(store, admins)
     api = Telegram(token)
     try:
         me = api.call("getMe")
         bot.username = me["username"]
+        bot.membership = Membership(api, me["id"])
         webhook = api.call("getWebhookInfo")
         if webhook.get("url"):
             parser.exit(2, "У бота активен webhook. Отключите прежний способ запуска перед long polling.\n")

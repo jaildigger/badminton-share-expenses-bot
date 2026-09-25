@@ -27,12 +27,14 @@ def summary(store, owner, tid):
     return "\n".join(lines)
 
 
-def queue_updates(store, owner, force_tid=None):
+def queue_updates(store, owner, force_tid=None, notify_uid=None):
     for pub in store.all("SELECT p.* FROM publications p JOIN trainings t ON t.id=p.training_id WHERE t.owner=?", (owner,)):
         tid = pub["training_id"]
         text = summary(store, owner, tid)
         if text != pub["desired"] or tid == force_tid:
             store.execute("UPDATE publications SET desired=? WHERE training_id=?", (text, tid))
+            if notify_uid is not None:
+                store.execute("UPDATE publications SET notify_uid=? WHERE training_id=?", (notify_uid, tid))
             store.enqueue("publishTraining", {"training_id": tid})
 
 
@@ -79,10 +81,10 @@ def deliver(store, api, tid):
             store.execute("INSERT OR REPLACE INTO publication_messages VALUES (?,?,?,?)", (tid, part, message_id, text))
     if first_delivery:
         with store.db:
-            store.enqueue("sendMessage", {"chat_id": pub["owner"], "text": "Итог тренировки #{} опубликован в «{}». Отметки оплат будут обновляться в этом сообщении.".format(tid, pub["title"])})
+            store.enqueue("sendMessage", {"chat_id": pub["notify_uid"] or pub["owner"], "text": "Итог тренировки #{} опубликован в «{}». Отметки оплат будут обновляться в этом сообщении.".format(tid, pub["title"])})
 
 
 def notify_failure(store, tid):
-    pub = store.one("SELECT p.title,t.owner FROM publications p JOIN trainings t ON t.id=p.training_id WHERE p.training_id=?", (tid,))
+    pub = store.one("SELECT p.title,p.notify_uid,t.owner FROM publications p JOIN trainings t ON t.id=p.training_id WHERE p.training_id=?", (tid,))
     if pub:
-        store.enqueue("sendMessage", {"chat_id": pub["owner"], "text": "Не удалось опубликовать или обновить итог #{} в «{}». Проверьте, что бот состоит в группе и может отправлять сообщения, затем нажмите «Обновить итог в группе».".format(tid, pub["title"])})
+        store.enqueue("sendMessage", {"chat_id": pub["notify_uid"] or pub["owner"], "text": "Не удалось опубликовать или обновить итог #{} в «{}». Проверьте, что бот состоит в группе и может отправлять сообщения, затем нажмите «Обновить итог в группе».".format(tid, pub["title"])})

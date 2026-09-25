@@ -71,7 +71,56 @@ class Store:
         self.db.executescript(SCHEMA)
         if "active" not in {r[1] for r in self.db.execute("PRAGMA table_info(locations)")}:
             self.db.execute("ALTER TABLE locations ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        if "created_by" not in {r[1] for r in self.db.execute("PRAGMA table_info(trainings)")}:
+            self.db.execute("ALTER TABLE trainings ADD COLUMN created_by INTEGER NOT NULL DEFAULT 0")
+            self.db.execute("UPDATE trainings SET created_by=owner")
+        if "notify_uid" not in {r[1] for r in self.db.execute("PRAGMA table_info(publications)")}:
+            self.db.execute("ALTER TABLE publications ADD COLUMN notify_uid INTEGER NOT NULL DEFAULT 0")
+            self.db.execute("UPDATE publications SET notify_uid=(SELECT owner FROM trainings WHERE id=training_id)")
+        self.db.commit()
         self.db.execute("PRAGMA journal_mode=WAL")
+
+    def initialize_shared(self):
+        """One shared group per installation. Preserve IDs and historical payments."""
+        if self.setting("shared_workspace") == "1":
+            return
+        bindings = self.all("SELECT * FROM group_bindings ORDER BY owner")
+        if len({r["chat_id"] for r in bindings}) > 1:
+            raise ValidationError("Найдено несколько групп. Перед объединением выберите одну общую группу.")
+        with self.db:
+            # Keep every referenced person ID. Duplicates leave the directory only.
+            seen = set()
+            for row in self.all("SELECT * FROM people ORDER BY id"):
+                saved = row["saved"] and row["name_key"] not in seen
+                if saved:
+                    seen.add(row["name_key"])
+                self.execute("UPDATE people SET saved=0 WHERE id=?", (row["id"],))
+                self.execute("UPDATE people SET owner=0,saved=? WHERE id=?", (int(saved), row["id"]))
+            locations = {}
+            for row in self.all("SELECT * FROM locations ORDER BY id"):
+                canonical = locations.get(row["name_key"])
+                if canonical is not None:
+                    self.execute("UPDATE trainings SET location_id=? WHERE location_id=?", (canonical, row["id"]))
+                    if row["active"]:
+                        self.execute("UPDATE locations SET active=1 WHERE id=?", (canonical,))
+                    self.execute("DELETE FROM locations WHERE id=?", (row["id"],))
+                else:
+                    self.execute("UPDATE locations SET owner=0 WHERE id=?", (row["id"],))
+                    locations[row["name_key"]] = row["id"]
+            self.execute("UPDATE trainings SET owner=0")
+            self.execute("DELETE FROM group_bindings")
+            if bindings:
+                b = bindings[0]
+                self.execute("INSERT INTO group_bindings VALUES (0,?,?,?)", (b["chat_id"], b["title"], b["thread_id"]))
+            self.execute("UPDATE sessions SET generation=generation+1,state='{}'")
+            self.set_setting("shared_workspace", "1")
+            self.set_setting("shared_revision", "0")
+            for table in ("people", "locations", "trainings", "participants", "court_payments", "transfers", "payments"):
+                for operation in ("INSERT", "UPDATE", "DELETE"):
+                    self.execute("CREATE TRIGGER shared_{}_{} AFTER {} ON {} BEGIN UPDATE settings SET value=CAST(value AS INTEGER)+1 WHERE key='shared_revision'; END".format(table, operation.lower(), operation, table))
+
+    def revision(self):
+        return self.setting("shared_revision", "0")
 
     def one(self, sql, args=()):
         return self.db.execute(sql, args).fetchone()
@@ -138,7 +187,7 @@ class Store:
     def location(self, owner, name):
         name = clean_name(name)
         self.execute("INSERT OR IGNORE INTO locations(owner,name,name_key) VALUES (?,?,?)", (owner, name, name.casefold()))
-        self.execute("UPDATE locations SET active=1 WHERE owner=? AND name_key=?", (owner, name.casefold()))
+        self.execute("UPDATE locations SET active=1 WHERE owner=? AND name_key=? AND active<>1", (owner, name.casefold()))
         return self.one("SELECT id FROM locations WHERE owner=? AND name_key=?", (owner, name.casefold()))[0]
 
     def training(self, owner, tid, draft=False):
