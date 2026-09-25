@@ -7,6 +7,7 @@ import time
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .bot import Bot
 from .store import Store
@@ -65,6 +66,14 @@ def main():
         admins = {int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
         if not admins or any(uid <= 0 for uid in admins):
             raise ValueError("Укажите ADMIN_IDS в .env — числовые Telegram ID организаторов через запятую.")
+        miniapp_url = os.environ.get("MINIAPP_URL", "").strip()
+        miniapp_port = int(os.environ.get("MINIAPP_PORT", "8080"))
+        if not 1 <= miniapp_port <= 65535:
+            raise ValueError("MINIAPP_PORT должен быть от 1 до 65535.")
+        if miniapp_url:
+            url = urlsplit(miniapp_url)
+            if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
+                raise ValueError("MINIAPP_URL должен быть HTTPS-адресом без пути, параметров и пароля.")
     except ValueError as error:
         parser.exit(2, "Ошибка настроек: {}\n".format(error))
     if args.check:
@@ -88,6 +97,7 @@ def main():
     store.seed_defaults({0})
     bot = Bot(store, admins)
     api = Telegram(token)
+    web_server = None
     try:
         me = api.call("getMe")
         bot.username = me["username"]
@@ -95,6 +105,13 @@ def main():
         webhook = api.call("getWebhookInfo")
         if webhook.get("url"):
             parser.exit(2, "У бота активен webhook. Отключите прежний способ запуска перед long polling.\n")
+        if miniapp_url:
+            from .miniapp import start_server
+            web_server = start_server(path, token, admins, bot.membership,
+                                      os.environ.get("MINIAPP_HOST", "127.0.0.1"), miniapp_port)
+            api.call("setChatMenuButton", {"menu_button": {
+                "type": "web_app", "text": "Тренировки", "web_app": {"url": miniapp_url}}})
+            logging.info("Mini App слушает порт %s", miniapp_port)
         logging.info("Бот @%s запущен. Организаторов: %s", me["username"], len(admins))
         delay = 1
         while True:
@@ -119,6 +136,9 @@ def main():
     except KeyboardInterrupt:
         logging.info("Бот остановлен.")
     finally:
+        if web_server:
+            web_server.shutdown()
+            web_server.server_close()
         store.db.close()
         lock.close()
 

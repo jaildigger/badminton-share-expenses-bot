@@ -1,4 +1,8 @@
 *
 !badminton/
 !badminton/*.py
+!badminton/web/
+!badminton/web/*.html
+!badminton/web/*.css
+!badminton/web/*.js
 !Dockerfile
