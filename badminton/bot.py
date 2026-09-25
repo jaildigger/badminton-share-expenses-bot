@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from .calculator import ValidationError, hours, hours_input, money, money_input, quantity_input
+from .publishing import queue_updates
 
 
 PAGE_SIZE = 8
@@ -12,6 +13,7 @@ class Bot:
     def __init__(self, store, admin_ids):
         self.s = store
         self.admin_ids = set(admin_ids)
+        self.username = "badminton_share_bot"
 
     def send(self, uid, text, buttons=(), state=None):
         generation, _ = self.s.session(uid)
@@ -46,7 +48,27 @@ class Bot:
                   "Данные каждого организатора хранятся отдельно.",
                   [("Новая тренировка", "new"), ("Тренировки и история", "history:0"),
                    ("Добавить участника в справочник", "register"),
-                   ("Добавить локацию", "locregister")])
+                   ("Добавить локацию", "locregister"), ("Группа для публикаций", "group")])
+
+    def group_message(self, uid, message):
+        if uid not in self.admin_ids or message.get("from", {}).get("is_bot"):
+            return
+        command = message.get("text", "").strip().split()
+        if not command:
+            return
+        name, _, target = command[0].partition("@")
+        if name != "/bind" or (target and target.lower() != self.username.lower()):
+            return
+        chat = message["chat"]
+        self.s.execute("INSERT OR REPLACE INTO group_bindings VALUES (?,?,?,?)",
+                       (uid, chat["id"], chat.get("title", "Группа"), message.get("message_thread_id")))
+        self.s.enqueue("sendMessage", {"chat_id": uid, "text": "Группа «{}» подключена. В личном чате откройте зафиксированный расчёт и нажмите «Опубликовать итог в группе».".format(chat.get("title", "Группа"))})
+
+    def group_help(self, uid):
+        group = self.s.one("SELECT * FROM group_bindings WHERE owner=?", (uid,))
+        text = "Подключена группа: {}.\n\n".format(group["title"]) if group else "Группа пока не подключена.\n\n"
+        text += "Добавьте бота в группу и отправьте там /bind@{}. Затем откройте расчёт тренировки в личке и нажмите «Опубликовать итог в группе».\n\nВвод данных и отметки оплат остаются в личном чате.".format(self.username)
+        self.send(uid, text, [("Главное меню", "home")])
 
     def process(self, update):
         """Commit input, state, financial writes, responses and polling offset together."""
@@ -60,6 +82,10 @@ class Bot:
             uid = user.get("id")
             if callback:
                 self.s.enqueue("answerCallbackQuery", {"callback_query_id": callback["id"]})
+            if uid and not callback and message.get("chat", {}).get("type") in ("group", "supergroup"):
+                self.group_message(uid, message)
+                self.s.set_setting("offset", update_id + 1)
+                return
             if not uid or message.get("chat", {}).get("type") != "private":
                 self.s.set_setting("offset", update_id + 1)
                 return
@@ -81,6 +107,7 @@ class Bot:
                     self.text(uid, message["text"].strip(), state)
                 else:
                     self.s.enqueue("sendMessage", {"chat_id": uid, "text": "Используйте кнопки или отправьте текст."})
+                queue_updates(self.s, uid)
             except ValidationError as error:
                 self.s.execute("ROLLBACK TO action")
                 # Preserve the active prompt and its buttons on validation failures.
@@ -221,6 +248,10 @@ class Bot:
         else:
             lines += ["", "Тренировка закрыта. Все переводы отмечены."]
             buttons += [("Открыть снова для исправления оплат", "reopen:{}".format(tid))]
+        published = self.s.one("SELECT title FROM publications WHERE training_id=?", (tid,))
+        buttons.append(("Обновить итог в группе" if published else "Опубликовать итог в группе", "publish:{}".format(tid)))
+        if published:
+            lines += ["", "Группа для итога: " + published["title"]]
         buttons += [("К тренировке", "view:{}".format(tid))]
         self.send(uid, "\n".join(lines), buttons)
 
@@ -243,6 +274,8 @@ class Bot:
         args = parts[1:]
         if cmd == "home":
             return self.home(uid)
+        if cmd == "group":
+            return self.group_help(uid)
         if cmd == "new":
             today = datetime.now(timezone(timedelta(hours=7))).strftime("%d.%m.%Y")
             return self.prompt(uid, "Введите дату тренировки: ДД.ММ.ГГГГ (например {}).\nМожно написать «сегодня».".format(today), "newdate")
@@ -267,6 +300,26 @@ class Bot:
         if not args or not args[0].isdigit():
             raise ValidationError("Неизвестная кнопка. Откройте /start.")
         number = int(args[0])
+        if cmd in ("publish", "publishconfirm"):
+            t = self.s.training(uid, number)
+            if t["status"] == "draft":
+                raise ValidationError("Сначала зафиксируйте расчёт.")
+            pub = self.s.one("SELECT * FROM publications WHERE training_id=?", (number,))
+            group = pub or self.s.one("SELECT * FROM group_bindings WHERE owner=?", (uid,))
+            if not group:
+                return self.group_help(uid)
+            if cmd == "publish" and not pub:
+                return self.send(uid, "Опубликовать итог тренировки #{} в группе «{}»?\nВ сообщении будут стоимость участия, имена и суммы переводов. Отметки оплат будут обновляться автоматически.".format(number, group["title"]),
+                                 [("Опубликовать в «{}»".format(group["title"]), "publishconfirm:{}".format(number)), ("Назад", "settlements:{}:0".format(number))],
+                                 {"kind": "publish", "tid": number, "chat_id": group["chat_id"], "thread_id": group["thread_id"], "title": group["title"]})
+            if not pub:
+                _, state = self.s.session(uid)
+                if state.get("kind") != "publish" or state.get("tid") != number:
+                    raise ValidationError("Откройте публикацию заново.")
+                self.s.execute("INSERT INTO publications(training_id,chat_id,title,thread_id) VALUES (?,?,?,?)",
+                               (number, state["chat_id"], state["title"], state["thread_id"]))
+            queue_updates(self.s, uid, force_tid=number)
+            return self.settlements(uid, number)
         if cmd == "view":
             return self.view(uid, number)
         if cmd == "members":

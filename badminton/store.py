@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox (
  id INTEGER PRIMARY KEY, method TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS group_bindings (
+ owner INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, title TEXT NOT NULL,
+ thread_id INTEGER);
+CREATE TABLE IF NOT EXISTS publications (
+ training_id INTEGER PRIMARY KEY REFERENCES trainings(id), chat_id INTEGER NOT NULL,
+ title TEXT NOT NULL, thread_id INTEGER, desired TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS publication_messages (
+ training_id INTEGER REFERENCES publications(training_id), part INTEGER NOT NULL,
+ message_id INTEGER NOT NULL, text TEXT NOT NULL,
+ PRIMARY KEY(training_id,part));
 """
 
 

@@ -5,11 +5,12 @@ from urllib.request import Request, urlopen
 
 
 class TelegramError(Exception):
-    def __init__(self, code, retry_after=0):
+    def __init__(self, code, retry_after=0, reason=""):
         # Never include request URLs: they contain the bot token.
         super().__init__("Telegram API error {}".format(code))
         self.code = code
         self.retry_after = retry_after
+        self.reason = reason
 
 
 class Telegram:
@@ -30,5 +31,11 @@ class Telegram:
         except (URLError, TimeoutError, OSError, ValueError):
             raise TelegramError(0) from None
         if not result.get("ok"):
-            raise TelegramError(result.get("error_code", 0), result.get("parameters", {}).get("retry_after", 0))
+            description = result.get("description", "").lower()
+            reason = ""
+            if "message is not modified" in description:
+                reason = "not_modified"
+            elif "message to edit not found" in description:
+                reason = "message_missing"
+            raise TelegramError(result.get("error_code", 0), result.get("parameters", {}).get("retry_after", 0), reason)
         return result["result"]

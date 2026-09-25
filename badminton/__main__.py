@@ -9,6 +9,7 @@ from pathlib import Path
 from .bot import Bot
 from .store import Store
 from .telegram import Telegram, TelegramError
+from . import publishing
 
 
 def load_env(path):
@@ -30,10 +31,17 @@ def drain_outbox(store, api):
         if not row:
             return
         try:
-            api.call(row["method"], json.loads(row["payload"]))
+            payload = json.loads(row["payload"])
+            if row["method"] == "publishTraining":
+                publishing.deliver(store, api, payload["training_id"])
+            else:
+                api.call(row["method"], payload)
         except TelegramError as error:
             # Expired callback acknowledgements and blocked/deleted chats are terminal.
-            if (row["method"] == "answerCallbackQuery" and error.code == 400) or error.code == 403:
+            if row["method"] == "publishTraining" and error.code in (400, 403):
+                with store.db:
+                    publishing.notify_failure(store, payload["training_id"])
+            elif (row["method"] == "answerCallbackQuery" and error.code == 400) or error.code == 403:
                 logging.warning("Ответ не доставлен: %s, code=%s", row["method"], error.code)
             else:
                 raise
@@ -74,6 +82,7 @@ def main():
     api = Telegram(token)
     try:
         me = api.call("getMe")
+        bot.username = me["username"]
         webhook = api.call("getWebhookInfo")
         if webhook.get("url"):
             parser.exit(2, "У бота активен webhook. Отключите прежний способ запуска перед long polling.\n")
