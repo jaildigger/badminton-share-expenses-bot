@@ -13,6 +13,7 @@ from .bot import Bot
 from .store import Store
 from .telegram import Telegram, TelegramError
 from . import publishing
+from . import polls
 from .access import Membership
 
 
@@ -38,6 +39,8 @@ def drain_outbox(store, api):
             payload = json.loads(row["payload"])
             if row["method"] == "publishTraining":
                 publishing.deliver(store, api, payload["training_id"])
+            elif row["method"] == "sendAttendancePoll":
+                polls.deliver(store, api, payload["id"])
             else:
                 api.call(row["method"], payload)
         except TelegramError as error:
@@ -118,7 +121,7 @@ def main():
             try:
                 drain_outbox(store, api)
                 updates = api.call("getUpdates", {"offset": int(store.setting("offset", "0")), "timeout": 30,
-                                                   "allowed_updates": ["message", "callback_query"]})
+                                                   "allowed_updates": ["message", "callback_query", "poll", "poll_answer"]})
                 for update in updates:
                     bot.process(update)
                     drain_outbox(store, api)

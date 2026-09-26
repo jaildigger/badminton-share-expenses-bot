@@ -39,14 +39,14 @@ async function save(action,values={}){
   // Keep the same key after a lost response; an explicit refresh reconciles uncertain results.
   const signature=JSON.stringify(base);
   if(!pending||pending.signature!==signature)pending={signature,body:{...base,request_id:crypto.randomUUID()}};
-  try {state=await request('/api/action',pending.body);pending=null;tid=state.training?.id||0;modal.close();render();notify(action==='publish'?'Публикация поставлена в очередь. Бот сообщит о доставке.':'Сохранено');}
+  try {state=await request('/api/action',pending.body);pending=null;tid=state.training?.id||0;modal.close();render();notify(['publish','poll_create'].includes(action)?'Публикация поставлена в очередь. Бот сообщит о доставке.':'Сохранено');}
   catch(error){if(error.status&&error.status<500)pending=null;notify(error.message);const e=content.querySelector('[role="alert"]');if(e)e.textContent=error.message;}
   finally{setBusy(false);}
 }
 function render(){
   nav.hidden=false;nav.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.nav===page));
   if(tid){app.innerHTML=trainingView(state.training);tg?.BackButton?.show();}
-  else{tg?.BackButton?.hide();app.innerHTML=page==='directory'?directoryView():page==='group'?groupView():homeView();}
+  else{tg?.BackButton?.hide();app.innerHTML=page==='directory'?directoryView():page==='polls'?pollsView():page==='group'?groupView():homeView();}
   app.setAttribute('aria-busy','false');
 }
 function homeView(){
@@ -92,13 +92,36 @@ function bindLocation(){content.querySelector('#location-select').onchange=e=>{c
 function personChoice(rows,selected){return `<label for="person-select">Участник</label><select name="pid" id="person-select" required><option value="">Выберите человека</option>${options(rows,selected)}<option value="new">+ Новое имя</option></select><div id="person-new" hidden>${nameField()}<label class="checkbox"><input type="checkbox" name="saved" checked>Сохранить для следующих тренировок</label></div>`;}
 function bindPerson(){const select=content.querySelector('#person-select');const area=content.querySelector('#person-new');const sync=()=>{area.hidden=select.value!=='new';area.querySelectorAll('input').forEach(i=>{i.disabled=area.hidden;});};select.onchange=sync;sync();}
 function choosePerson(values){if(values.pid==='new')return {name:values.name,saved:values.saved==='on'};return {pid:values.pid};}
+function pollsView(){
+  const labels={queued:'В очереди',sending:'Отправляется',sent:'Опубликовано',failed:'Доставка не подтверждена'};
+  return `<div class="heading"><div><div class="eyebrow">Кто идёт играть</div><h1>Голосования</h1></div>${button('+ Создать','pollnew')}</div><p>Голосуйте в Telegram: можно менять ответ, добавлять варианты и видеть участников.</p>${(state.polls||[]).map(p=>`<section class="card"><h2>${esc(p.question)}</h2><p>${p.closed?'Закрыто':labels[p.status]}</p>${p.options.map(o=>`<div class="breakdown"><b>${esc(o.text)} · ${o.voter_count||0}</b><div class="muted">${o.voters.map(v=>esc(v.name)).join(', ')||'Нет полученных голосов'}</div></div>`).join('')}${p.url?`<a class="poll-link" href="${esc(p.url)}" target="_blank" rel="noopener">Открыть в Telegram ↗</a>`:''}${p.status==='failed'?'<p class="danger">Проверьте группу перед повторной отправкой: опрос мог быть доставлен.</p>':''}</section>`).join('')||'<div class="empty"><h2>Соберём команду?</h2><p>Создайте первое голосование с датой тренировки.</p></div>'}`;
+}
+function newTrainingDialog(manual=false){
+  const p=manual?null:state.latest_poll;
+  if(p?.existing_training_id){
+    openDialog('Тренировка уже существует',`На ${dateLabel(p.training_date)} уже есть тренировка.`,button('Создать вручную','newmanual','','text-button'),'Открыть тренировку',()=>{modal.close();load(p.existing_training_id);});return;
+  }
+  const eligible=p&&!p.incomplete;
+  const hint=p?(p.incomplete?'<div class="hint warning">Голоса ещё синхронизируются. Можно отменить и обновить данные либо создать тренировку вручную.</div>':`<div class="hint">Из голосования «${esc(p.question)}»:<br>${p.participants.map(v=>esc(v.name)).join(', ')||'Пока нет участников с подходящим ответом'}</div><label class="checkbox"><input type="checkbox" name="import_poll" checked>Добавить участников голосования</label>`):'';
+  openDialog('Новая тренировка','Укажите общую стоимость корта за всю тренировку.',hint+locationFields(eligible?{date:p.training_date,location_id:p.location_id}:{}),'Создать тренировку',v=>save('create',{...v,poll_id:eligible&&v.import_poll==='on'?p.id:null}));bindLocation();
+  if(eligible)content.querySelector('[name="date"]').addEventListener('change',e=>{const checkbox=content.querySelector('[name="import_poll"]');checkbox.checked=e.target.value===p.training_date;checkbox.disabled=e.target.value!==p.training_date;});
+}
 function act(action,id,value){
   const t=state?.training;
   if(action==='refresh')return load();
   if(action==='back'){tid=0;page='trainings';render();return;}
   if(action==='filter'){filter=value;render();return;}
   if(action==='open'){page='trainings';return load(Number(id));}
-  if(action==='new'||action==='details'){openDialog(action==='new'?'Новая тренировка':'Параметры тренировки','Укажите общую стоимость корта за всю тренировку.',locationFields(action==='details'?t:{}),action==='new'?'Создать тренировку':'Сохранить',v=>save(action==='new'?'create':'details',v));bindLocation();return;}
+  if(action==='pollnew'){
+    if(!state.group){notify('Сначала подключите группу в разделе «Группа».');return;}
+    const title=(state.locations[0]?.name||'Бадминтон')+' · '+state.today.slice(8,10)+'/'+state.today.slice(5,7);
+    openDialog('Новое голосование',`Будет отправлено в «${esc(state.group.title)}». Голоса открытые, смена ответа и добавление вариантов включены.`,field('Заголовок с датой дд/мм или дд.мм','question',title,'maxlength="300"')+'<label>Варианты ответа — каждый с новой строки<textarea name="options" rows="5" required>19:00-21:00\nThinking\nNo</textarea></label><div class="hint">Для автозаписи: Yes, Да, 19:00-21:00, 19:00, 18:00-20:00. Пробелы и регистр не важны. Другие ответы видны в голосовании, но не добавляют человека автоматически.</div>','Опубликовать голосование',v=>save('poll_create',{question:v.question,options:v.options.split(/\r?\n/),chat_id:state.group.chat_id,thread_id:state.group.thread_id}));return;
+  }
+  if(action==='newmanual'){modal.close();return newTrainingDialog(true);}
+  if(action==='new'){
+    setBusy(true);request('/api/state').then(data=>{state=data;setBusy(false);newTrainingDialog();}).catch(error=>{setBusy(false);notify(error.message);});return;
+  }
+  if(action==='details'){openDialog('Параметры тренировки','Укажите общую стоимость корта за всю тренировку.',locationFields(t),'Сохранить',v=>save('details',v));bindLocation();return;}
   if(action==='person'||action==='location'){openDialog(action==='person'?'Новый участник':'Новая локация',action==='person'?'Для тёзок добавьте фамилию или отличительный признак.':'Локация сохранится для следующих тренировок.',nameField(action==='person'?'Имя':'Название'),'Добавить',v=>save(action,v));return;}
   if(action==='add'){
     const rows=state.people.filter(p=>!t.participants.some(x=>x.person_id===p.id));

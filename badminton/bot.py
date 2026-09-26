@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from .calculator import ValidationError, hours, hours_input, money, money_input, quantity_input
 from .publishing import queue_updates
+from . import polls
 
 
 PAGE_SIZE = 8
@@ -69,6 +70,7 @@ class Bot:
                   "Время по умолчанию — 2 часа, воланов — 0. Валюта — тайский бат.\n"
                   "История тренировок и справочники общие для участников группы.",
                   [("Новая тренировка", "new"), ("Тренировки и история", "history:0"),
+                   ("Создать голосование", "pollnew"), ("Голосования и ответы", "polls"),
                    ("Добавить участника в справочник", "register"),
                    ("Добавить локацию", "locregister"), ("Группа для публикаций", "group")])
 
@@ -108,7 +110,13 @@ class Bot:
         # Check Telegram before opening a write transaction; transient failures retry the update.
         denial = self.access_error(uid) if uid and message.get("chat", {}).get("type") == "private" else None
         with self.s.db:
+            if not self.s.db.in_transaction:
+                self.s.execute('BEGIN IMMEDIATE')
             if update_id < int(self.s.setting("offset", "0")):
+                return
+            if 'poll' in update or 'poll_answer' in update:
+                polls.receive(self.s, update)
+                self.s.set_setting('offset', update_id + 1)
                 return
             callback = update.get("callback_query")
             message = callback.get("message", {}) if callback else update.get("message", {})
@@ -169,13 +177,13 @@ class Bot:
             buttons.append(("Следующие", "{}:{}".format(prefix, page+1)))
         return buttons
 
-    def locations(self, uid, date, tid=0, page=0):
+    def locations(self, uid, date, tid=0, page=0, poll_id=None):
         records = self.s.all("SELECT * FROM locations WHERE owner=? AND active=1 ORDER BY id", (self.scope(uid),))
         buttons = [(r["name"], "loc:{}".format(r["id"])) for r in records[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
         buttons += self.pages("locpage", page, len(records))
         buttons += [("Добавить новую локацию", "locadd"), ("Отмена", "view:{}".format(tid) if tid else "home")]
         self.send(uid, "Выберите локацию тренировки на {}.".format(date), buttons,
-                  {"kind": "location", "date": date, "tid": tid})
+                  {"kind": "location", "date": date, "tid": tid, "poll_id": poll_id})
 
     def view(self, uid, tid):
         t = self.s.training(self.scope(uid), tid)
@@ -306,6 +314,24 @@ class Bot:
         self.send(uid, "{} → {}\nВсего: {}\nОплачено: {}\nОсталось: {}\n\nБот записывает факт оплаты со слов организатора. Деньги не переводит.".format(
             tr["sender_name"], tr["recipient_name"], money(tr["amount"]), money(tr["paid"]), money(remaining)), buttons)
 
+    def poll_preview(self, uid, question, options):
+        question, options, date = polls.validate(question, options)
+        group = self.s.one('SELECT * FROM group_bindings WHERE owner=?', (self.scope(uid),))
+        if not group:
+            raise ValidationError('Сначала подключите группу командой /bind.')
+        self.send(uid, 'Голосование в «{}»\n{}\nДата: {}\n\n{}\n\nОткрытые голоса, смена ответа и добавление вариантов включены.'.format(
+            group['title'], question, date, '\n'.join('• ' + o for o in options)),
+            [('Опубликовать голосование', 'pollsend'), ('Изменить варианты', 'polledit'),
+             ('Изменить заголовок', 'polltitle'), ('Отмена', 'home')],
+            {'kind': 'pollpreview', 'question': question, 'options': options,
+             'chat_id': group['chat_id'], 'thread_id': group['thread_id']})
+
+    def poll_list(self, uid):
+        rows = self.s.all('SELECT * FROM attendance_polls WHERE owner=? ORDER BY id DESC LIMIT 30', (self.scope(uid),))
+        self.send(uid, 'Голосования' if rows else 'Голосований пока нет.',
+                  [(r['question'], 'pollview:{}'.format(r['id'])) for r in rows] +
+                  [('Создать голосование', 'pollnew'), ('Главное меню', 'home')])
+
     def action(self, uid, action):
         parts = action.split(":")
         cmd = parts[0]
@@ -314,7 +340,51 @@ class Bot:
             return self.home(uid)
         if cmd == "group":
             return self.group_help(uid)
+        if cmd == 'pollnew':
+            if not self.s.one('SELECT 1 FROM group_bindings WHERE owner=?', (self.scope(uid),)):
+                return self.group_help(uid)
+            return self.prompt(uid, 'Введите заголовок с локацией и датой дд/мм или дд.мм. Например: Baam · 26/09.', 'polltitle', options=polls.DEFAULT_OPTIONS)
+        if cmd == 'polls':
+            return self.poll_list(uid)
+        if cmd in ('polledit', 'polltitle', 'pollsend'):
+            _, state = self.s.session(uid)
+            if state.get('kind') != 'pollpreview':
+                raise ValidationError('Откройте создание голосования заново.')
+            if cmd == 'polledit':
+                return self.prompt(uid, 'Отправьте весь список вариантов, каждый с новой строки.\n\n' + '\n'.join(state['options']), 'polloptions', question=state['question'])
+            if cmd == 'polltitle':
+                return self.prompt(uid, 'Введите новый заголовок с датой дд/мм или дд.мм.', 'polltitle', options=state['options'])
+            group = self.s.one('SELECT * FROM group_bindings WHERE owner=?', (self.scope(uid),))
+            if not group or (group['chat_id'], group['thread_id']) != (state['chat_id'], state['thread_id']):
+                raise ValidationError('Группа или тема изменилась. Создайте голосование заново.')
+            polls.queue(self.s, self.scope(uid), uid, state['question'], state['options'])
+            return self.send(uid, 'Голосование поставлено в очередь. Бот сообщит о доставке.', [('Голосования', 'polls'), ('Главное меню', 'home')])
+        if cmd == 'pollview':
+            row = self.s.one('SELECT * FROM attendance_polls WHERE id=? AND owner=?', (int(args[0]), self.scope(uid)))
+            if not row:
+                raise ValidationError('Голосование не найдено.')
+            poll = polls.view(self.s, row)
+            text = poll['question'] + '\nСтатус: ' + {'queued': 'в очереди', 'sending': 'отправляется', 'failed': 'доставка не подтверждена', 'sent': 'закрыто' if poll['closed'] else 'опубликовано'}[poll['status']]
+            for option in poll['options']:
+                text += '\n\n{} — {}\n{}'.format(option['text'], option.get('voter_count', 0), ', '.join(v['name'] for v in option['voters']) or 'Пока нет полученных голосов')
+            return self.send(uid, text, [('Обновить', action), ('Все голосования', 'polls')])
         if cmd == "new":
+            candidate = polls.latest(self.s, self.scope(uid))
+            if candidate:
+                if candidate['existing_training_id']:
+                    return self.send(uid, 'На дату последнего голосования уже есть тренировка.', [('Открыть тренировку', 'view:{}'.format(candidate['existing_training_id'])), ('Создать вручную', 'newmanual')])
+                if not candidate['incomplete']:
+                    self.send(uid, 'Из голосования «{}» будут добавлены: {}.\nСостав можно изменить после создания.'.format(candidate['question'], ', '.join(v['name'] for v in candidate['participants']) or 'пока никто'), [('Продолжить', 'polluse:{}'.format(candidate['id'])), ('Создать вручную', 'newmanual')])
+                    return
+                return self.send(uid, 'Голоса ещё синхронизируются. Обновите через несколько секунд.', [('Обновить', 'new'), ('Создать вручную', 'newmanual')])
+        if cmd == 'polluse':
+            candidate = polls.latest(self.s, self.scope(uid))
+            if not candidate or candidate['id'] != int(args[0]) or candidate['existing_training_id']:
+                raise ValidationError('Откройте «Новую тренировку» заново.')
+            if candidate['location_id']:
+                return self.chosen_location(uid, {'tid': 0, 'date': candidate['training_date'], 'poll_id': candidate['id']}, candidate['location_id'])
+            return self.locations(uid, candidate['training_date'], poll_id=candidate['id'])
+        if cmd in ('new', 'newmanual'):
             today = datetime.now(timezone(timedelta(hours=7))).strftime("%d.%m.%Y")
             return self.prompt(uid, "Введите дату тренировки: ДД.ММ.ГГГГ (например {}).\nМожно написать «сегодня».".format(today), "newdate")
         if cmd == "register":
@@ -328,9 +398,9 @@ class Bot:
             if state.get("kind") != "location":
                 raise ValidationError("Откройте выбор локации заново.")
             if cmd == "locpage":
-                return self.locations(uid, state["date"], state["tid"], int(args[0]))
+                return self.locations(uid, state["date"], state["tid"], int(args[0]), state.get("poll_id"))
             if cmd == "locadd":
-                return self.prompt(uid, "Введите название новой локации.", "newlocation", state["tid"], date=state["date"])
+                return self.prompt(uid, "Введите название новой локации.", "newlocation", state["tid"], date=state["date"], poll_id=state.get("poll_id"))
             loc = self.s.one("SELECT id FROM locations WHERE id=? AND owner=?", (int(args[0]), self.scope(uid)))
             if not loc:
                 raise ValidationError("Локация не найдена.")
@@ -438,7 +508,7 @@ class Bot:
             self.s.training(self.scope(uid), state["tid"], draft=True)
             self.s.execute("UPDATE trainings SET location_id=? WHERE id=?", (location_id, state["tid"]))
             return self.view(uid, state["tid"])
-        return self.prompt(uid, "Введите полную стоимость корта в батах.", "newcost", date=state["date"], location_id=location_id)
+        return self.prompt(uid, "Введите полную стоимость корта в батах.", "newcost", date=state["date"], location_id=location_id, poll_id=state.get("poll_id"))
 
     def text(self, uid, text, state):
         command = text.split(" ")[0].split("@")[0].lower()
@@ -446,12 +516,20 @@ class Bot:
             return self.home(uid)
         if command == "/new":
             return self.action(uid, "new")
+        if command == "/poll":
+            return self.action(uid, "pollnew")
+        if command == "/polls":
+            return self.poll_list(uid)
         if command == "/history":
             return self.history(uid, 0)
         if command == "/cancel":
             return self.view(uid, state["tid"]) if state.get("tid") else self.home(uid)
         kind = state.get("kind")
         tid = state.get("tid", 0)
+        if kind == 'polltitle':
+            return self.poll_preview(uid, text, state['options'])
+        if kind == 'polloptions':
+            return self.poll_preview(uid, state['question'], text.splitlines())
         if kind == "newdate":
             return self.locations(uid, self.parse_date(text))
         if kind in ("newlocation", "locregister"):
@@ -459,7 +537,7 @@ class Bot:
             return self.chosen_location(uid, state, location_id) if kind == "newlocation" else self.home(uid)
         if kind == "newcost":
             cost = money_input(text)
-            tid = self.s.execute("INSERT INTO trainings(owner,date,location_id,court_cost,created_by) VALUES (?,?,?,?,?)", (self.scope(uid), state["date"], state["location_id"], cost, uid)).lastrowid
+            tid = polls.create_training(self.s, self.scope(uid), uid, state["date"], state["location_id"], cost, state.get("poll_id"))
             return self.members(uid, tid, 0)
         if kind == "register":
             self.s.person(self.scope(uid), text)

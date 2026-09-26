@@ -17,6 +17,7 @@ from .calculator import ValidationError, hours_input, money_input, quantity_inpu
 from .publishing import queue_updates
 from .store import Store
 from .telegram import TelegramError
+from . import polls
 
 
 class AuthenticationError(ValueError):
@@ -57,6 +58,8 @@ def snapshot(store, uid, admins, tid=0):
         "revision": store.revision(), "is_admin": uid in admins,
         "today": datetime.now(timezone(timedelta(hours=7))).date().isoformat(),
         "group": dict(group) if group else None,
+        "latest_poll": polls.latest(store, 0),
+        "polls": [polls.view(store, row) for row in store.all('SELECT * FROM attendance_polls WHERE owner=0 ORDER BY id DESC LIMIT 30')],
         "people": [dict(r) for r in store.all("SELECT id,name FROM people WHERE owner=0 AND saved=1 ORDER BY name COLLATE NOCASE")],
         "locations": [dict(r) for r in store.all("SELECT id,name FROM locations WHERE owner=0 AND active=1 ORDER BY name")],
         "trainings": [dict(r) for r in store.all("""SELECT t.*,l.name location,
@@ -85,6 +88,14 @@ def mutate(store, uid, body):
     """Called in a BEGIN IMMEDIATE transaction, with a checked shared revision."""
     action = body["action"]
     tid = int(body.get("tid", 0))
+    if action == 'poll_create':
+        group = store.one('SELECT * FROM group_bindings WHERE owner=0')
+        if not group:
+            raise ValidationError('Сначала подключите группу командой /bind.')
+        if body.get('chat_id') != group['chat_id'] or body.get('thread_id') != group['thread_id']:
+            raise Conflict('Группа или тема изменилась. Обновите данные и подтвердите публикацию снова.')
+        polls.queue(store, 0, uid, body['question'], body['options'])
+        return tid
     if action in ("person", "location"):
         if action == "person":
             store.person(0, body["name"])
@@ -100,7 +111,7 @@ def mutate(store, uid, body):
         if not store.one("SELECT 1 FROM locations WHERE id=? AND owner=0 AND active=1", (lid,)):
             raise ValidationError("Выберите локацию.")
         if action == "create":
-            return store.execute("INSERT INTO trainings(owner,date,location_id,court_cost,created_by) VALUES (0,?,?,?,?)", (date, lid, cost, uid)).lastrowid
+            return polls.create_training(store, 0, uid, date, lid, cost, body.get('poll_id'))
         paid = store.one("SELECT COALESCE(SUM(amount),0) FROM court_payments WHERE training_id=?", (tid,))[0]
         if cost < paid:
             raise ValidationError("Сначала уменьшите оплаты корта: они превышают новую стоимость.")

@@ -69,6 +69,8 @@ class Store:
         self.db = sqlite3.connect(str(path))
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        from .polls import SCHEMA as POLL_SCHEMA
+        self.db.executescript(POLL_SCHEMA)
         if "active" not in {r[1] for r in self.db.execute("PRAGMA table_info(locations)")}:
             self.db.execute("ALTER TABLE locations ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         if "created_by" not in {r[1] for r in self.db.execute("PRAGMA table_info(trainings)")}:
@@ -143,9 +145,12 @@ class Store:
                     AND id NOT IN (SELECT person_id FROM participants)
                     AND id NOT IN (SELECT person_id FROM court_payments)
                     AND id NOT IN (SELECT sender FROM transfers)
-                    AND id NOT IN (SELECT recipient FROM transfers)""", (owner,))
+                    AND id NOT IN (SELECT recipient FROM transfers)
+                    AND id NOT IN (SELECT person_id FROM telegram_people)""", (owner,))
                 self.execute("UPDATE locations SET active=0 WHERE owner=?", (owner,))
-                self.execute("DELETE FROM locations WHERE owner=? AND id NOT IN (SELECT location_id FROM trainings)", (owner,))
+                self.execute("""DELETE FROM locations WHERE owner=?
+                    AND id NOT IN (SELECT location_id FROM trainings)
+                    AND id NOT IN (SELECT location_id FROM attendance_polls WHERE location_id IS NOT NULL)""", (owner,))
                 for name in PARTICIPANTS:
                     self.person(owner, name)
                 for name in LOCATIONS:
