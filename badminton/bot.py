@@ -144,7 +144,7 @@ class Bot:
                     if not separator or token != str(generation):
                         self.s.enqueue("sendMessage", {"chat_id": uid, "text": "Это старое меню. Используйте последнее сообщение бота или /start."})
                     else:
-                        if action.split(":")[0] in {"select", "remove", "lock", "payfull", "undo", "unlock", "close", "reopen", "publishconfirm", "loc"}:
+                        if action.split(":")[0] in {"select", "remove", "lock", "payfull", "undo", "unlock", "close", "reopen", "publishconfirm", "loc", "deleteconfirm"}:
                             self.check_revision(state)
                         self.action(uid, action)
                 elif "text" in message:
@@ -208,7 +208,8 @@ class Bot:
                        ("Изменить стоимость корта", "cost:{}".format(tid)),
                        ("Изменить дату", "date:{}".format(tid)),
                        ("Изменить локацию", "location:{}".format(tid)),
-                       ("Рассчитать", "preview:{}".format(tid))]
+                       ("Рассчитать", "preview:{}".format(tid)),
+                       ("Удалить черновик", "deletedraft:{}".format(tid))]
         else:
             lines += ["", "Статус: " + ("закрыта" if t["status"] == "closed" else "расчёт зафиксирован")]
             buttons = [("Расчёт и переводы", "settlements:{}:0".format(tid))]
@@ -408,6 +409,17 @@ class Bot:
         if not args or not args[0].isdigit():
             raise ValidationError("Неизвестная кнопка. Откройте /start.")
         number = int(args[0])
+        if cmd == 'deletedraft':
+            t = self.s.training(self.scope(uid), number, draft=True)
+            return self.send(uid, 'Удалить черновик #{} · {} · {}?\nСостав и расходы будут удалены без возможности отмены. Справочники и голосование сохранятся. Старые сообщения в группе останутся.'.format(number, t['date'], t['location']),
+                             [('Да, удалить черновик', 'deleteconfirm:{}'.format(number)), ('Отмена', 'view:{}'.format(number))],
+                             {'kind': 'delete_draft', 'tid': number})
+        if cmd == 'deleteconfirm':
+            _, state = self.s.session(uid)
+            if state.get('kind') != 'delete_draft' or state.get('tid') != number:
+                raise ValidationError('Откройте подтверждение удаления заново.')
+            self.s.delete_draft(self.scope(uid), number)
+            return self.history(uid, 0)
         if cmd in ("publish", "publishconfirm"):
             t = self.s.training(self.scope(uid), number)
             if t["status"] == "draft":

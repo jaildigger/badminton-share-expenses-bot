@@ -200,8 +200,10 @@ def create_training(store, owner, uid, date, lid, cost, poll_id=None):
             raise ValidationError('Тренировка на эту дату уже существует. Откройте историю.')
         if candidate['incomplete']:
             raise ValidationError('Ещё не все голоса получены. Обновите данные через несколько секунд или создайте тренировку вручную.')
-    tid = store.execute('INSERT INTO trainings(owner,date,location_id,court_cost,created_by) VALUES (?,?,?,?,?)',
-                        (owner, date, lid, cost, uid)).lastrowid
+    next_id = max(store.one('SELECT COALESCE(MAX(id),0) FROM trainings')[0],
+                  int(store.setting('training_id_high_water', '0'))) + 1
+    tid = store.execute('INSERT INTO trainings(id,owner,date,location_id,court_cost,created_by) VALUES (?,?,?,?,?,?)',
+                        (next_id, owner, date, lid, cost, uid)).lastrowid
     if candidate:
         for voter in candidate['participants']:
             mapping = store.one('SELECT person_id FROM telegram_people WHERE owner=? AND user_id=?', (owner, voter['id']))

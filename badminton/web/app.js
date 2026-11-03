@@ -39,7 +39,7 @@ async function save(action,values={}){
   // Keep the same key after a lost response; an explicit refresh reconciles uncertain results.
   const signature=JSON.stringify(base);
   if(!pending||pending.signature!==signature)pending={signature,body:{...base,request_id:crypto.randomUUID()}};
-  try {state=await request('/api/action',pending.body);pending=null;tid=state.training?.id||0;modal.close();render();notify(['publish','poll_create'].includes(action)?'Публикация поставлена в очередь. Бот сообщит о доставке.':'Сохранено');}
+  try {state=await request('/api/action',pending.body);pending=null;tid=state.training?.id||0;modal.close();render();notify(action==='delete_draft'?'Черновик удалён':['publish','poll_create'].includes(action)?'Публикация поставлена в очередь. Бот сообщит о доставке.':'Сохранено');}
   catch(error){if(error.status&&error.status<500)pending=null;notify(error.message);const e=content.querySelector('[role="alert"]');if(e)e.textContent=error.message;}
   finally{setBusy(false);}
 }
@@ -71,6 +71,7 @@ function trainingView(t){
     <section class="card"><div class="row"><h2>02 · Участники</h2>${button('+ Добавить','add','','text-button')}</div>${!t.participants.length?'<p>Выберите игроков из справочника или добавьте гостя. По умолчанию — 2 часа игры.</p>':''}${t.participants.map(p=>`<div class="person row"><span class="avatar">${esc(p.name[0])}</span><div class="person-info"><b>${esc(p.name)}</b>${!p.saved?'<small>Гость</small>':''}<small>${new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(p.minutes/60)} ч · ${p.shuttle_count} вол. ${p.shuttle_count?'× '+money(p.shuttle_price):''}</small></div>${button('Изменить','participant',`data-id="${p.person_id}"`,'edit')}</div>`).join('')}</section>
     <section class="card"><div class="row"><h2>03 · Оплата корта</h2>${button('+ Плательщик','payer','','text-button')}</div><p>Кто уже оплатил корт? Плательщик может не участвовать в игре.</p>${t.payers.filter(p=>p.amount>0).map(p=>`<div class="person row"><div class="person-info"><b>${esc(p.name)}</b><small>${money(p.amount)}</small></div>${button('Изменить','payer',`data-id="${p.person_id}"`,'edit')}</div>`).join('')}<div class="row breakdown"><span class="muted">Указано / стоимость</span><b class="amount">${money(paid)} / ${money(t.court_cost)}</b></div>${paid!==t.court_cost?`<div class="hint warning">Осталось распределить ${money(t.court_cost-paid)}</div>`:''}</section>
     ${calc?button('Посмотреть расчёт →','preview','','full'):`<div class="hint warning">${esc(t.calculation_error)}</div><button class="full" disabled>Посмотреть расчёт →</button>`}`;
+    html+=button('Удалить черновик','delete_draft','','text-button danger full');
   }else{
     html+=calculationView(t);
     html+=`<section class="card"><h2>Переводы</h2><p>Отмечайте деньги, которые уже получены.</p>${t.transfers.length?t.transfers.map(tr=>`<div class="transfer"><div class="row"><b>${esc(tr.sender_name)} → ${esc(tr.recipient_name)}</b><b class="amount">${money(tr.amount)}</b></div><p>${tr.paid===tr.amount?'✓ Оплачено полностью':`Получено ${money(tr.paid)} · остаток ${money(tr.amount-tr.paid)}`}</p><div class="progress"><progress value="${tr.paid}" max="${tr.amount}" aria-label="Оплачено"></progress></div>${t.status==='settling'?button(tr.paid===tr.amount?'Посмотреть оплату':'Отметить оплату','transfer',`data-id="${tr.id}"`,'secondary full'):''}</div>`).join(''):'<div class="hint">Все расходы уже распределены. Переводы не нужны.</div>'}</section>`;
@@ -146,6 +147,7 @@ function act(action,id,value){
   }
   if(action==='undo')return confirmDialog('Отменить последнюю отметку?','Остаток перевода увеличится на сумму последней отмеченной оплаты.','Отменить отметку',()=>save('undo',{transfer_id:Number(id)}));
   if(action==='publish'){const g=t.publication||state.group;return confirmDialog('Опубликовать итог?',`В группе «${esc(g.title)}» появятся имена, стоимость участия и суммы переводов.`,'Опубликовать',()=>save('publish',{chat_id:g.chat_id,thread_id:g.thread_id}));}
+  if(action==='delete_draft')return confirmDialog('Удалить черновик?',`Тренировка № ${t.id} · ${dateLabel(t.date)} · ${esc(t.location)} будет удалена вместе с составом и расходами. Отменить удаление нельзя. Справочники и голосование сохранятся. Старые сообщения в группе останутся.`,'Удалить черновик',()=>save('delete_draft'));
   if(action==='unlock')return confirmDialog('Вернуть к редактированию?','Сначала отмените все отметки оплат. Опубликованный расчёт будет помечен как неактуальный.','Вернуть к редактированию',()=>save('unlock'));
   if(action==='close')return confirmDialog('Закрыть тренировку?','Все переводы отмечены. Тренировка останется в истории.','Закрыть тренировку',()=>save('close'));
   if(action==='reopen')return save('reopen');

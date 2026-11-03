@@ -88,6 +88,9 @@ def mutate(store, uid, body):
     """Called in a BEGIN IMMEDIATE transaction, with a checked shared revision."""
     action = body["action"]
     tid = int(body.get("tid", 0))
+    if action == 'delete_draft':
+        store.delete_draft(0, tid)
+        return 0
     if action == 'poll_create':
         group = store.one('SELECT * FROM group_bindings WHERE owner=0')
         if not group:

@@ -85,6 +85,13 @@ const path = require('node:path');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     await submit('Создать тренировку');
     await page.getByRole('heading',{name:'Новый зал',exact:true}).waitFor();
+    await click('Удалить черновик');
+    await page.getByRole('dialog').getByRole('button',{name:'Отмена',exact:true}).click();
+    await page.getByRole('heading',{name:'Новый зал',exact:true}).waitFor();
+    await click('Удалить черновик');
+    await submit('Удалить черновик');
+    await page.getByRole('heading',{name:'Тренировки',exact:true}).waitFor();
+    assert.equal(await page.getByRole('button').filter({hasText:'Новый зал'}).count(),0);
     assert.deepEqual(errors,[]);
     console.log('Browser lifecycle passed at mobile and desktop widths. Screenshots: /tmp/bad-bot-miniapp-*.png');
   }finally{if(browser)await browser.close();server.kill();}

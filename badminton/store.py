@@ -203,6 +203,25 @@ class Store:
             raise ValidationError("Расчёт зафиксирован. Сначала верните тренировку к редактированию.")
         return row
 
+    def delete_draft(self, owner, tid):
+        """Controller holds a write transaction; preserve directories and poll votes."""
+        self.training(owner, tid, draft=True)
+        if self.one("SELECT 1 FROM outbox WHERE method='publishTraining' AND json_extract(payload,'$.training_id')=?", (tid,)):
+            raise ValidationError("Дождитесь обновления итога в группе и повторите удаление.")
+        # Never reuse a deleted ID: old chat menus and cached API requests may reference it.
+        self.set_setting('training_id_high_water', max(tid, int(self.setting('training_id_high_water', '0'))))
+        self.execute('DELETE FROM publication_messages WHERE training_id=?', (tid,))
+        self.execute('DELETE FROM publications WHERE training_id=?', (tid,))
+        self.execute('DELETE FROM payments WHERE transfer_id IN (SELECT id FROM transfers WHERE training_id=?)', (tid,))
+        self.execute('DELETE FROM transfers WHERE training_id=?', (tid,))
+        self.execute('DELETE FROM court_payments WHERE training_id=?', (tid,))
+        self.execute('DELETE FROM participants WHERE training_id=?', (tid,))
+        self.execute('DELETE FROM trainings WHERE id=?', (tid,))
+        # Keep replay keys so retrying an earlier creation cannot recreate the draft.
+        if self.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='miniapp_requests'"):
+            self.execute('UPDATE miniapp_requests SET tid=0 WHERE tid=?', (tid,))
+        self.execute("UPDATE sessions SET generation=generation+1,state='{}' WHERE json_extract(state,'$.tid')=?", (tid,))
+
     def person_owned(self, owner, pid):
         row = self.one("SELECT * FROM people WHERE owner=? AND id=?", (owner, pid))
         if not row:
