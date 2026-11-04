@@ -34,17 +34,25 @@ class CollectorTests(unittest.TestCase):
         self.assertIn(note, lines)
         with self.s.db:
             self.s.lock(0, self.tid)
-        self.assertIn(note, summary(self.s, 0, self.tid))
+        published = summary(self.s, 0, self.tid)
+        self.assertIn('Все переводят плательщику корта: Андрей.', published)
+        self.assertIn('Андрей должен вернуть: Мария 300 thb.', published)
+        self.assertNotIn('Кто кому переводит', published)
+        self.assertNotIn(' → ', published)
+        self.assertNotIn(note, published)
         refund = next(tr for tr in self.s.transfers(self.tid) if tr['recipient'] == self.m)
         with self.s.db:
             self.s.pay(0, refund['id'], 10000)
         self.assertIn('200.00', self.s.settlement_notes(0, self.tid)[0])
+        self.assertIn('Андрей должен вернуть: Мария 200 thb.', summary(self.s, 0, self.tid))
         with self.s.db:
             self.s.pay(0, refund['id'], 20000)
         self.assertEqual(self.s.settlement_notes(0, self.tid), [])
+        self.assertNotIn('должен вернуть:', summary(self.s, 0, self.tid))
         with self.s.db:
             self.s.undo_payment(0, refund['id'])
         self.assertIn('200.00', self.s.settlement_notes(0, self.tid)[0])
+        self.assertIn('Андрей должен вернуть: Мария 200 thb.', summary(self.s, 0, self.tid))
 
     def test_historical_routes_and_partial_payments_remain_unchanged(self):
         with self.s.db:
@@ -55,6 +63,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(self.s.calculation(0, self.tid).transfers, old)
         self.assertEqual(self.s.transfers(self.tid)[0]['paid'], 12000)
         self.assertEqual(self.s.settlement_notes(0, self.tid), [])
+        self.assertNotIn('должен вернуть:', summary(self.s, 0, self.tid))
         with self.s.db:
             self.s.pay(0, transfer_id, 18000)
             self.s.close_training(0, self.tid)
@@ -83,3 +92,21 @@ class CollectorTests(unittest.TestCase):
         with self.s.db:
             self.s.set_court_payment(0, self.tid, self.a, 30000)
             self.s.lock(0, self.tid)
+
+
+    def test_summary_lists_multiple_refunds_with_fractional_amounts(self):
+        with self.s.db:
+            self.s.update_participant(0, self.tid, self.m, 'shuttle_count', 1)
+            self.s.update_participant(0, self.tid, self.m, 'shuttle_price', 60001)
+            self.s.update_participant(0, self.tid, self.b, 'shuttle_count', 1)
+            self.s.update_participant(0, self.tid, self.b, 'shuttle_price', 60001)
+            self.s.lock(0, self.tid)
+        self.assertIn('Андрей должен вернуть: Мария 100 thb, Борис 100.01 thb.', summary(self.s, 0, self.tid))
+
+    def test_summary_omits_refunds_when_none_due(self):
+        with self.s.db:
+            self.s.update_participant(0, self.tid, self.m, 'shuttle_count', 0)
+            self.s.lock(0, self.tid)
+        published = summary(self.s, 0, self.tid)
+        self.assertIn('Все переводят плательщику корта: Андрей.', published)
+        self.assertNotIn('должен вернуть:', published)

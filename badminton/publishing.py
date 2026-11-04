@@ -16,15 +16,30 @@ def summary(store, owner, tid):
              "Всего: {}".format(money(result.total)), "", "Стоимость участия:"]
     lines += ["{}: доля {} · баланс {}".format(p["name"], money(result.shares[p["person_id"]]), money(result.balances[p["person_id"]])) for p in members]
     lines += ['Баланс: плюс — доплатить, минус — получить.']
-    lines += store.settlement_notes(owner, tid)
-    lines += ["", "Кто кому переводит:"]
     transfers = store.transfers(tid)
-    for tr in transfers:
-        remaining = tr["amount"] - tr["paid"]
-        status = "оплачено" if not remaining else "осталось " + money(remaining)
-        lines.append("{} → {}: {} — {}".format(tr["sender_name"], tr["recipient_name"], money(tr["amount"]), status))
-    if not transfers:
-        lines.append("Переводы не нужны.")
+    payers = store.all("SELECT c.person_id,p.name FROM court_payments c JOIN people p ON p.id=c.person_id WHERE c.training_id=? AND c.amount>0", (tid,))
+    lines.append("")
+    if len(payers) == 1 and all(
+            tr["sender"] == payers[0]["person_id"] or tr["recipient"] == payers[0]["person_id"]
+            for tr in transfers):
+        payer = payers[0]
+        lines.append("Все переводят плательщику корта: {}.".format(payer["name"]))
+        suppliers = {p["person_id"] for p in members
+                     if p["shuttle_count"] > 0 and result.balances[p["person_id"]] < 0}
+        refunds = ["{} {} thb".format(tr["recipient_name"],
+                   format((tr["amount"] - tr["paid"]) / 100, ".2f").rstrip("0").rstrip("."))
+                   for tr in transfers if tr["sender"] == payer["person_id"]
+                   and tr["recipient"] in suppliers and tr["amount"] > tr["paid"]]
+        if refunds:
+            lines.append("{} должен вернуть: {}.".format(payer["name"], ", ".join(refunds)))
+    else:
+        # Free courts and historical direct settlements have no single collector.
+        for tr in transfers:
+            remaining = tr["amount"] - tr["paid"]
+            if remaining:
+                lines.append("{} → {}: {}.".format(tr["sender_name"], tr["recipient_name"], money(remaining)))
+        if not any(tr["amount"] > tr["paid"] for tr in transfers):
+            lines.append("Переводы не нужны.")
     lines += ["", "Тренировка закрыта." if t["status"] == "closed" else "Отметки оплат обновляет организатор."]
     return "\n".join(lines)
 
