@@ -76,6 +76,7 @@ def snapshot(store, uid, admins, tid=0):
         try:
             result = store.calculation(0, tid)
             t["calculation"] = asdict(result)
+            t['settlement_notes'] = store.settlement_notes(0, tid)
             ids = set(result.balances)
             t["names"] = {str(pid): store.person_owned(0, pid)["name"] for pid in ids}
         except ValidationError as error:
@@ -115,9 +116,7 @@ def mutate(store, uid, body):
             raise ValidationError("Выберите локацию.")
         if action == "create":
             return polls.create_training(store, 0, uid, date, lid, cost, body.get('poll_id'))
-        paid = store.one("SELECT COALESCE(SUM(amount),0) FROM court_payments WHERE training_id=?", (tid,))[0]
-        if cost < paid:
-            raise ValidationError("Сначала уменьшите оплаты корта: они превышают новую стоимость.")
+        store.set_court_cost(0, tid, cost)
         store.execute("UPDATE trainings SET date=?,location_id=?,court_cost=? WHERE id=?", (date, lid, cost, tid))
     elif action in ("add", "participant", "remove", "payer"):
         store.training(0, tid, draft=True)
@@ -132,7 +131,7 @@ def mutate(store, uid, body):
         elif action == "remove":
             store.execute("DELETE FROM participants WHERE training_id=? AND person_id=?", (tid, pid))
         else:
-            store.set_court_payment(0, tid, pid, money_input(body["amount"]))
+            store.set_court_payment(0, tid, pid, money_input(body["amount"]) if "amount" in body else store.training(0, tid)["court_cost"])
     elif action in ("lock", "unlock", "close"):
         {"lock": store.lock, "unlock": store.unlock, "close": store.close_training}[action](0, tid)
     elif action == "reopen":

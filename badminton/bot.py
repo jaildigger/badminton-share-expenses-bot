@@ -197,7 +197,7 @@ class Bot:
             lines.append("{}{} — {} ч · воланы: {} × {} = {}".format(
                 p["name"], " (гость)" if not p["saved"] else "", hours(p["minutes"]),
                 p["shuttle_count"], money(p["shuttle_price"]), money(p["shuttle_count"]*p["shuttle_price"])))
-        lines += ["", "Корт оплатили:"]
+        lines += ["", "Корт оплатил:"]
         lines += ["{} — {}".format(p["name"], money(p["amount"])) for p in payments] or ["Пока никто не указан."]
         missing = t["court_cost"] - sum(p["amount"] for p in payments)
         if missing:
@@ -238,10 +238,10 @@ class Bot:
         buttons = [(p["name"], "{}:{}:{}".format(action, tid, p["id"])) for p in records[page*PAGE_SIZE:(page+1)*PAGE_SIZE]]
         buttons += self.pages("{}:{}".format(prefix, tid), page, len(records))
         if payer:
-            buttons.append(("Добавить нового плательщика", "payeradd:{}".format(tid)))
+            buttons.append(("Указать нового человека", "payeradd:{}".format(tid)))
         buttons.append(("К тренировке", "view:{}".format(tid)))
-        self.send(uid, ("Кто оплатил корт? Выберите человека и введите его общую сумму.\n"
-                        "Можно указать нескольких. Для исправления выберите имя снова; 0 удаляет его оплату.")
+        self.send(uid, ("Кто оплатил корт целиком? Выберите одного человека.\n"
+                        "Выбор другого человека заменит прежнего плательщика.")
                   if payer else "Выберите участника. После добавления можно выбрать следующего.", buttons)
 
     def person_view(self, uid, tid, pid):
@@ -266,7 +266,8 @@ class Bot:
                  "Округление до 0,01 ฿ с распределением остатка.", ""]
         for pid, balance in result.balances.items():
             outcome = "доплатить " + money(balance) if balance > 0 else "получить " + money(-balance) if balance < 0 else "расчёт закрыт"
-            lines.append("{}: доля {} · {}".format(names[pid], money(result.shares.get(pid, 0)), outcome))
+            lines.append("{}: доля {} · баланс {} · {}".format(names[pid], money(result.shares.get(pid, 0)), money(balance), outcome))
+        lines += self.s.settlement_notes(self.scope(uid), tid)
         return lines, result, names
 
     def preview(self, uid, tid):
@@ -458,6 +459,9 @@ class Bot:
             if cmd == "remove":
                 self.s.execute("DELETE FROM participants WHERE training_id=? AND person_id=?", (number, pid))
                 return self.members(uid, number, 0)
+            if cmd == "courtperson":
+                self.s.set_court_payment(self.scope(uid), number, pid, self.s.training(self.scope(uid), number)["court_cost"])
+                return self.view(uid, number)
             prompts = {"hours": "Введите время участия в часах, например 1,5.",
                        "count": "Сколько воланов потрачено? Введите целое число; 0 — ни одного.",
                        "price": "Введите стоимость одного волана в батах.",
@@ -558,7 +562,8 @@ class Bot:
             self.s.training(self.scope(uid), tid, draft=True)
             pid = self.s.person(self.scope(uid), text, state.get("saved", True))
             if kind == "payeradd":
-                return self.prompt(uid, "Введите сумму, которую этот человек оплатил за корт.", "courtperson", tid, pid=pid)
+                self.s.set_court_payment(self.scope(uid), tid, pid, self.s.training(self.scope(uid), tid)["court_cost"])
+                return self.view(uid, tid)
             self.s.add_participant(self.scope(uid), tid, pid)
             return self.person_view(uid, tid, pid)
         if kind in ("hours", "count", "price"):
@@ -577,10 +582,7 @@ class Bot:
             self.s.training(self.scope(uid), tid, draft=True)
             if kind == "cost":
                 cost = money_input(text)
-                paid = self.s.one("SELECT COALESCE(SUM(amount),0) FROM court_payments WHERE training_id=?", (tid,))[0]
-                if cost < paid:
-                    raise ValidationError("Новая стоимость меньше уже указанных оплат. Сначала уменьшите оплаты корта.")
-                self.s.execute("UPDATE trainings SET court_cost=? WHERE id=?", (cost, tid))
+                self.s.set_court_cost(self.scope(uid), tid, cost)
             else:
                 self.s.execute("UPDATE trainings SET date=? WHERE id=?", (self.parse_date(text), tid))
             return self.view(uid, tid)

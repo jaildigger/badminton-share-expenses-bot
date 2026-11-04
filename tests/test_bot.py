@@ -61,7 +61,7 @@ class BotTests(unittest.TestCase):
             self.store.set_court_payment(11, tid, alice, 35000)
         return tid, alice, bob
 
-    def test_complete_conversation_with_split_payers_partial_payments_and_reopen(self):
+    def test_complete_conversation_with_payer_replacement_partial_payments_and_reopen(self):
         tid = self.create()
         self.click("Добавить нового участника")
         self.message("Андрей")
@@ -81,10 +81,8 @@ class BotTests(unittest.TestCase):
         self.click("К тренировке")
         self.click("Кто оплатил корт")
         self.click("Андрей")
-        self.message("150")
         self.click("Кто оплатил корт")
         self.click("Рамиля")
-        self.message("200")
         self.click("Рассчитать")
         self.assertIn("730.00", self.last()["text"])
         self.click("Зафиксировать и отмечать оплаты")

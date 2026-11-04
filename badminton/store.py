@@ -1,9 +1,10 @@
 """SQLite persistence. Controller processes each incoming update atomically."""
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
-from .calculator import Participant, ValidationError, calculate
+from .calculator import Participant, Transfer, ValidationError, calculate, money
 from .defaults import LOCATIONS, PARTICIPANTS
 
 
@@ -247,16 +248,47 @@ class Store:
     def set_court_payment(self, owner, tid, pid, amount):
         training = self.training(owner, tid, draft=True)
         self.person_owned(owner, pid)
-        other = self.one("SELECT COALESCE(SUM(amount),0) FROM court_payments WHERE training_id=? AND person_id<>?", (tid, pid))[0]
-        if amount < 0 or other + amount > training["court_cost"]:
-            raise ValidationError("Сумма оплат превышает стоимость корта. Сначала исправьте прежние оплаты или стоимость.")
-        self.execute("INSERT OR REPLACE INTO court_payments VALUES (?,?,?)", (tid, pid, amount))
+        if amount not in (0, training["court_cost"]):
+            raise ValidationError("Корт оплачивает один человек целиком. Укажите полную стоимость корта.")
+        self.execute("DELETE FROM court_payments WHERE training_id=?", (tid,))
+        if amount:
+            self.execute("INSERT INTO court_payments VALUES (?,?,?)", (tid, pid, amount))
+
+    def set_court_cost(self, owner, tid, cost):
+        self.training(owner, tid, draft=True)
+        if cost < 0:
+            raise ValidationError("Стоимость корта не может быть отрицательной.")
+        self.execute("UPDATE trainings SET court_cost=? WHERE id=?", (cost, tid))
+        payments = self.all("SELECT person_id FROM court_payments WHERE training_id=?", (tid,))
+        if len(payments) == 1:
+            self.execute("UPDATE court_payments SET amount=? WHERE training_id=?", (cost, tid))
 
     def calculation(self, owner, tid):
         t = self.training(owner, tid)
         participants = [Participant(p["person_id"], p["minutes"], p["shuttle_count"], p["shuttle_price"]) for p in self.participants(tid)]
         payments = {p["person_id"]: p["amount"] for p in self.all("SELECT * FROM court_payments WHERE training_id=?", (tid,))}
-        return calculate(t["court_cost"], participants, payments)
+        if t['status'] == 'draft' and len([v for v in payments.values() if v > 0]) > 1:
+            raise ValidationError("Выберите одного плательщика корта заново.")
+        result = calculate(t["court_cost"], participants, payments)
+        if t['status'] != 'draft':
+            # Historical settlements keep their original routes and payment records.
+            result = replace(result, transfers=[Transfer(r['sender'], r['recipient'], r['amount'])
+                                               for r in self.transfers(tid)])
+        return result
+
+    def settlement_notes(self, owner, tid):
+        t = self.training(owner, tid)
+        result = self.calculation(owner, tid)
+        payers = {r['person_id'] for r in self.all('SELECT * FROM court_payments WHERE training_id=? AND amount>0', (tid,))}
+        suppliers = {p['person_id'] for p in self.participants(tid)
+                     if p['shuttle_count'] * p['shuttle_price'] > result.shares[p['person_id']]}
+        if t['status'] == 'draft':
+            transfers = [(tr.sender, tr.recipient, tr.amount) for tr in result.transfers]
+        else:
+            transfers = [(tr['sender'], tr['recipient'], tr['amount']-tr['paid']) for tr in self.transfers(tid)]
+        return ['Плательщик корта «{}» должен вернуть участнику «{}» {}: стоимость предоставленных воланов превысила долю участия.'.format(
+            self.person_owned(owner, sender)['name'], self.person_owned(owner, recipient)['name'], money(amount))
+            for sender, recipient, amount in transfers if sender in payers and recipient in suppliers and amount > 0]
 
     def lock(self, owner, tid):
         self.training(owner, tid, draft=True)

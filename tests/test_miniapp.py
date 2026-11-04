@@ -138,7 +138,7 @@ class MiniAppTests(unittest.TestCase):
             self.run_action('payer', name='Не сохранять', amount='1000')
         self.assertIsNone(self.s.one("SELECT id FROM people WHERE name='Не сохранять'"))
         with self.assertRaises(ValidationError):
-            self.run_action('details', date='2026-09-25', location_name='Не сохранять', court_cost='1')
+            self.run_action('details', date='2026-09-25', location_name='Не сохранять', court_cost='-1')
         self.assertIsNone(self.s.one("SELECT id FROM locations WHERE name='Не сохранять'"))
 
     def test_missing_shuttle_price_and_locked_edit(self):

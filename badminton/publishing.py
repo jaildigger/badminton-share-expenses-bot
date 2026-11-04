@@ -14,7 +14,9 @@ def summary(store, owner, tid):
     lines = [header, "Участников: {}".format(len(members)),
              "Корт: {} · Воланы: {}".format(money(t["court_cost"]), money(shuttles)),
              "Всего: {}".format(money(result.total)), "", "Стоимость участия:"]
-    lines += ["{}: {}".format(p["name"], money(result.shares[p["person_id"]])) for p in members]
+    lines += ["{}: доля {} · баланс {}".format(p["name"], money(result.shares[p["person_id"]]), money(result.balances[p["person_id"]])) for p in members]
+    lines += ['Баланс: плюс — доплатить, минус — получить.']
+    lines += store.settlement_notes(owner, tid)
     lines += ["", "Кто кому переводит:"]
     transfers = store.transfers(tid)
     for tr in transfers:

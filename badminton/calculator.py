@@ -103,6 +103,17 @@ def calculate(court_cost: int, participants: Sequence[Participant],
         balances[p.person_id] -= p.shuttle_cost
     for person_id, amount in court_payments.items():
         balances[person_id] = balances.get(person_id, 0) - amount
+    payers = [pid for pid, amount in court_payments.items() if amount > 0]
+    if payers:
+        collector = min(payers, key=lambda pid: (-court_payments[pid], pid))
+        # Route every settlement through the court payer, including refunds for shuttles.
+        transfers = [Transfer(pid, collector, balance) for pid, balance in sorted(balances.items())
+                     if pid != collector and balance > 0]
+        transfers += [Transfer(collector, pid, -balance) for pid, balance in sorted(balances.items())
+                      if pid != collector and balance < 0]
+        assert sum(shares.values()) == total and sum(balances.values()) == 0
+        return Calculation(total, shares, balances, transfers)
+    # A free court has no payer: settle shuttle expenses directly as before.
     creditors = [[pid, -v] for pid, v in sorted(balances.items()) if v < 0]
     debtors = [[pid, v] for pid, v in sorted(balances.items()) if v > 0]
     transfers = []

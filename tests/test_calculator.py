@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from badminton.calculator import Participant, ValidationError, calculate, hours_input, money_input, quantity_input
+from badminton.calculator import Participant, Transfer, ValidationError, calculate, hours_input, money_input, quantity_input
 
 
 class CalculationTests(unittest.TestCase):
@@ -19,7 +19,29 @@ class CalculationTests(unittest.TestCase):
         result = calculate(35000, people, {1: 35000})
         self.assertEqual(result.balances[1], -22833)
         self.assertEqual(result.balances[3], -25833)
-        self.assertEqual(sum(t.amount for t in result.transfers), 48666)
+        self.assertEqual(sum(t.amount for t in result.transfers if t.recipient == 1), 48666)
+        self.assertIn(Transfer(1, 3, 25833), result.transfers)
+        self.assertTrue(all(t.sender == 1 or t.recipient == 1 for t in result.transfers))
+
+    def test_zero_balance_collector_still_collects_and_refunds(self):
+        result = calculate(30000, [Participant(1), Participant(2, shuttle_count=6, shuttle_price=10000), Participant(3)], {1: 30000})
+        self.assertEqual(result.balances, {1: 0, 2: -30000, 3: 30000})
+        self.assertEqual(result.transfers, [Transfer(3, 1, 30000), Transfer(1, 2, 30000)])
+
+    def test_multiple_suppliers_and_collector_with_positive_balance(self):
+        result = calculate(20000, [Participant(1), Participant(2, 120, 5, 10000), Participant(3, 120, 5, 10000), Participant(4)], {1: 20000})
+        self.assertEqual(result.transfers, [Transfer(4, 1, 30000), Transfer(1, 2, 20000), Transfer(1, 3, 20000)])
+
+    def test_largest_payer_is_collector_and_tie_is_stable(self):
+        people = [Participant(1), Participant(2), Participant(3)]
+        result = calculate(30000, people, {1: 10000, 2: 20000, 99: 0})
+        self.assertEqual(result.transfers, [Transfer(3, 2, 10000)])
+        tied = calculate(30000, list(reversed(people)), {2: 15000, 1: 15000})
+        self.assertEqual(tied.transfers, [Transfer(3, 1, 10000), Transfer(1, 2, 5000)])
+
+    def test_free_court_settles_shuttles_directly(self):
+        result = calculate(0, [Participant(1, 120, 1, 10000), Participant(2)], {99: 0})
+        self.assertEqual(result.transfers, [Transfer(2, 1, 5000)])
 
     def test_different_time_and_prices(self):
         result = calculate(30000, [Participant(1, 60, 1, 5000), Participant(2, 120, 2, 7500)], {1: 10000, 2: 20000})
@@ -64,6 +86,10 @@ class CalculationTests(unittest.TestCase):
                 balances[tr.sender] -= tr.amount
                 balances[tr.recipient] += tr.amount
             self.assertTrue(all(x == 0 for x in balances.values()))
+            payers = {pid: amount for pid, amount in {0: first, count+1: court-first}.items() if amount > 0}
+            if payers:
+                collector = min(payers, key=lambda pid: (-payers[pid], pid))
+                self.assertTrue(all(tr.sender == collector or tr.recipient == collector for tr in result.transfers))
 
 
 class InputTests(unittest.TestCase):
