@@ -17,6 +17,8 @@ const path = require('node:path');
     await page.goto(url);
     const click=async(name)=>page.getByRole('button',{name,exact:true}).click();
     const submit=async(name)=>{await page.getByRole('dialog').getByRole('button',{name,exact:true}).click();await page.waitForFunction(()=>!document.querySelector('#modal').open);};
+    await page.getByRole('heading',{name:'Голосования',exact:true}).waitFor();
+    await click('Тренировки');
     await click('+ Новая');
     await page.getByLabel('Полная стоимость корта, ฿').fill('200');
     await submit('Создать тренировку');
