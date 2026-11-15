@@ -345,7 +345,7 @@ class Bot:
         if cmd == 'pollnew':
             if not self.s.one('SELECT 1 FROM group_bindings WHERE owner=?', (self.scope(uid),)):
                 return self.group_help(uid)
-            return self.prompt(uid, 'Введите заголовок с локацией и датой дд/мм или дд.мм. Например: Baam · 26/09.', 'polltitle', options=polls.DEFAULT_OPTIONS)
+            return self.poll_preview(uid, polls.default_title(), polls.DEFAULT_OPTIONS)
         if cmd == 'polls':
             return self.poll_list(uid)
         if cmd in ('polledit', 'polltitle', 'pollsend'):

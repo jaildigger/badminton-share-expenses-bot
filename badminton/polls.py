@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS poll_imports (
 """
 
 
+def default_title(now=None):
+    now = (now or datetime.now(TZ)).astimezone(TZ)
+    if now.hour >= 19:
+        now += timedelta(days=1)
+    weekdays = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+    return '{} - {}'.format(weekdays[now.weekday()], now.strftime('%d/%m'))
+
+
 def normalize(text):
     return ''.join(text.split()).casefold()
 

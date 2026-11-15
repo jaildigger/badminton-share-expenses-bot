@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import Mock
 
 from badminton import polls
@@ -13,6 +13,19 @@ from tests import test_bot
 
 
 class PollParsingTests(unittest.TestCase):
+    def test_default_title_bangkok_cutoff_and_rollover(self):
+        cases = [
+            ('2026-11-15T11:59:59+00:00', 'Sunday - 15/11'),
+            ('2026-11-15T12:00:00+00:00', 'Monday - 16/11'),
+            ('2026-11-15T23:00:00+07:00', 'Monday - 16/11'),
+            ('2026-11-16T00:00:00+07:00', 'Monday - 16/11'),
+            ('2026-11-30T19:00:00+07:00', 'Tuesday - 01/12'),
+            ('2026-12-31T19:00:00+07:00', 'Friday - 01/01'),
+        ]
+        for instant, expected in cases:
+            with self.subTest(instant=instant):
+                self.assertEqual(polls.default_title(datetime.fromisoformat(instant)), expected)
+
     def test_dates_and_rollover(self):
         self.assertEqual(polls.poll_date('Baam 01/01', date(2026, 12, 30)), '2027-01-01')
         self.assertEqual(polls.poll_date('Grand · 31.12', date(2027, 1, 2)), '2026-12-31')
@@ -193,6 +206,8 @@ class PollConversationTests(unittest.TestCase):
             s.location(0, 'Baam')
             s.execute("INSERT INTO group_bindings VALUES (0,-100123,'Группа',NULL)")
         h.message('/poll')
+        self.assertIn(polls.default_title(), h.last()['text'])
+        h.click('Изменить заголовок')
         h.message('Baam 26/09')
         self.assertIn('19:00-21:00', h.last()['text'])
         h.click('Изменить варианты')

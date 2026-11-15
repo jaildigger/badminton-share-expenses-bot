@@ -1,4 +1,10 @@
 'use strict';
+function defaultPollTitle(now = new Date()) {
+  const bangkok = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  if (bangkok.getUTCHours() >= 19) bangkok.setUTCDate(bangkok.getUTCDate() + 1);
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return weekdays[bangkok.getUTCDay()] + ' - ' + String(bangkok.getUTCDate()).padStart(2, '0') + '/' + String(bangkok.getUTCMonth() + 1).padStart(2, '0');
+}
 const tg = window.Telegram?.WebApp;
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
@@ -117,7 +123,7 @@ function act(action,id,value){
   if(action==='open'){page='trainings';return load(Number(id));}
   if(action==='pollnew'){
     if(!state.group){notify('Сначала подключите группу в разделе «Группа».');return;}
-    const title=(state.locations[0]?.name||'Бадминтон')+' · '+state.today.slice(8,10)+'/'+state.today.slice(5,7);
+    const title=defaultPollTitle();
     openDialog('Новое голосование',`Будет отправлено в «${esc(state.group.title)}». Голоса открытые, смена ответа и добавление вариантов включены.`,field('Заголовок с датой дд/мм или дд.мм','question',title,'maxlength="300"')+'<label>Варианты ответа — каждый с новой строки<textarea name="options" rows="5" required>19:00-21:00\nThinking\nNo</textarea></label><div class="hint">Для автозаписи: Yes, Да, 19:00-21:00, 19:00, 18:00-20:00. Пробелы и регистр не важны. Другие ответы видны в голосовании, но не добавляют человека автоматически.</div>','Опубликовать голосование',v=>save('poll_create',{question:v.question,options:v.options.split(/\r?\n/),chat_id:state.group.chat_id,thread_id:state.group.thread_id}));return;
   }
   if(action==='newmanual'){modal.close();return newTrainingDialog(true);}
