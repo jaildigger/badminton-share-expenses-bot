@@ -5,7 +5,7 @@ from .telegram import TelegramError
 
 def summary(store, owner, tid):
     t = store.training(owner, tid)
-    header = "Бадминтон · {} · {} · #{}".format(t["date"], t["location"], tid)
+    header = t["date"]
     if t["status"] == "draft":
         return header + "\n\nРасчёт пересматривается. Прежние суммы неактуальны. Дождитесь нового итога."
     result = store.calculation(owner, tid)
@@ -13,9 +13,8 @@ def summary(store, owner, tid):
     shuttles = sum(p["shuttle_count"] * p["shuttle_price"] for p in members)
     lines = [header, "Участников: {}".format(len(members)),
              "Корт: {} · Воланы: {}".format(money(t["court_cost"]), money(shuttles)),
-             "Всего: {}".format(money(result.total)), "", "Стоимость участия:"]
-    lines += ["{}: доля {} · баланс {}".format(p["name"], money(result.shares[p["person_id"]]), money(result.balances[p["person_id"]])) for p in members]
-    lines += ['Баланс: плюс — доплатить, минус — получить.']
+             "Всего: {}".format(money(result.total)), ""]
+    lines += ["{}: {}".format(p["name"], money(result.balances[p["person_id"]])) for p in members]
     transfers = store.transfers(tid)
     payers = store.all("SELECT c.person_id,p.name FROM court_payments c JOIN people p ON p.id=c.person_id WHERE c.training_id=? AND c.amount>0", (tid,))
     lines.append("")
@@ -23,7 +22,7 @@ def summary(store, owner, tid):
             tr["sender"] == payers[0]["person_id"] or tr["recipient"] == payers[0]["person_id"]
             for tr in transfers):
         payer = payers[0]
-        lines.append("Все переводят плательщику корта: {}.".format(payer["name"]))
+        lines.append("Переводить {}".format(payer["name"]))
         suppliers = {p["person_id"] for p in members
                      if p["shuttle_count"] > 0 and result.balances[p["person_id"]] < 0}
         refunds = ["{} {} thb".format(tr["recipient_name"],
@@ -40,7 +39,8 @@ def summary(store, owner, tid):
                 lines.append("{} → {}: {}.".format(tr["sender_name"], tr["recipient_name"], money(remaining)))
         if not any(tr["amount"] > tr["paid"] for tr in transfers):
             lines.append("Переводы не нужны.")
-    lines += ["", "Тренировка закрыта." if t["status"] == "closed" else "Отметки оплат обновляет организатор."]
+    if t["status"] == "closed":
+        lines += ["", "Тренировка закрыта."]
     return "\n".join(lines)
 
 

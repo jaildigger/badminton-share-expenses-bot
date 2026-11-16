@@ -35,7 +35,7 @@ class CollectorTests(unittest.TestCase):
         with self.s.db:
             self.s.lock(0, self.tid)
         published = summary(self.s, 0, self.tid)
-        self.assertIn('Все переводят плательщику корта: Андрей.', published)
+        self.assertIn('Переводить Андрей', published)
         self.assertIn('Андрей должен вернуть: Мария 300 thb.', published)
         self.assertNotIn('Кто кому переводит', published)
         self.assertNotIn(' → ', published)
@@ -108,5 +108,5 @@ class CollectorTests(unittest.TestCase):
             self.s.update_participant(0, self.tid, self.m, 'shuttle_count', 0)
             self.s.lock(0, self.tid)
         published = summary(self.s, 0, self.tid)
-        self.assertIn('Все переводят плательщику корта: Андрей.', published)
+        self.assertIn('Переводить Андрей', published)
         self.assertNotIn('должен вернуть:', published)
