@@ -38,12 +38,11 @@ const path = require('node:path');
     await dialog.getByRole('button',{name:'Зафиксировать расчёт',exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector('#modal').open);
     const refund=page.locator('.transfer').filter({hasText:'Андрей → Мария'});
-    await refund.getByRole('button',{name:'Отметить оплату'}).click();
-    await page.getByLabel('Полученная сумма, ฿').fill('100');
-    await dialog.getByRole('button',{name:'Отметить оплату',exact:true}).click();
-    await page.waitForFunction(()=>!document.querySelector('#modal').open);
-    await page.getByText(/Плательщик корта «Андрей» должен вернуть участнику «Мария» 200.00/).waitFor();
+    await refund.getByRole('button',{name:'Оплатил',exact:true}).click();
+    await refund.getByText('✓ Оплачено полностью',{exact:true}).waitFor();
+    assert.equal(await dialog.isVisible(),false);
+    assert.equal(await page.getByText(/Плательщик корта «Андрей» должен вернуть/).isVisible(),false);
     assert.deepEqual(errors,[]);
-    console.log('Collector routing, negative balance, refund comment and partial payment UI passed.');
+    console.log('Collector routing, negative balance, refund comment and full payment UI passed.');
   }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

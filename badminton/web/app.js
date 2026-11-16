@@ -82,7 +82,7 @@ function trainingView(t){
     html+=button('Удалить черновик','delete_draft','','text-button danger full');
   }else{
     html+=calculationView(t);
-    html+=`<section class="card"><h2>Переводы</h2><p>Отмечайте деньги, которые уже получены.</p>${t.transfers.length?t.transfers.map(tr=>`<div class="transfer"><div class="row"><b>${esc(tr.sender_name)} → ${esc(tr.recipient_name)}</b><b class="amount">${money(tr.amount)}</b></div><p>${tr.paid===tr.amount?'✓ Оплачено полностью':`Получено ${money(tr.paid)} · остаток ${money(tr.amount-tr.paid)}`}</p><div class="progress"><progress value="${tr.paid}" max="${tr.amount}" aria-label="Оплачено"></progress></div>${t.status==='settling'?button(tr.paid===tr.amount?'Посмотреть оплату':'Отметить оплату','transfer',`data-id="${tr.id}"`,'secondary full'):''}</div>`).join(''):'<div class="hint">Все расходы уже распределены. Переводы не нужны.</div>'}</section>`;
+    html+=`<section class="card"><h2>Переводы</h2><p>Отмечайте деньги, которые уже получены.</p>${t.transfers.length?t.transfers.map(tr=>`<div class="transfer"><div class="row"><b>${esc(tr.sender_name)} → ${esc(tr.recipient_name)}</b><b class="amount">${money(tr.amount)}</b></div><p>${tr.paid===tr.amount?'✓ Оплачено полностью':`Получено ${money(tr.paid)} · остаток ${money(tr.amount-tr.paid)}`}</p><div class="progress"><progress value="${tr.paid}" max="${tr.amount}" aria-label="Оплачено"></progress></div>${t.status==='settling'?button(tr.paid===tr.amount?'Посмотреть оплату':'Оплатил','transfer',`data-id="${tr.id}"`,'secondary full'):''}</div>`).join(''):'<div class="hint">Все расходы уже распределены. Переводы не нужны.</div>'}</section>`;
     const group=t.publication||state.group;
     html+=`<section class="card"><h2>Итог в группе</h2><p>${group?esc(group.title):'Сначала подключите группу в разделе «Группа».'}</p>${group?button(t.publication?'Обновить итог в группе':'Опубликовать итог','publish','','secondary full'):''}<small>Отметки оплат обновляют опубликованное сообщение автоматически.</small></section>`;
     if(t.status==='closed')html+=button('Открыть тренировку снова','reopen','','secondary full');
@@ -151,7 +151,8 @@ function act(action,id,value){
   }
   if(action==='transfer'){
     const tr=t.transfers.find(x=>x.id===Number(id)), rest=tr.amount-tr.paid;
-    openDialog(`${esc(tr.sender_name)} → ${esc(tr.recipient_name)}`,`Всего ${money(tr.amount)}. Получено ${money(tr.paid)}.`,(rest?number('Полученная сумма, ฿','amount',decimal(rest)):'<div class="hint">Перевод полностью оплачен.</div>')+(tr.paid?button('Отменить последнюю отметку','undo',`data-id="${tr.id}"`,'text-button danger'):''),rest?'Отметить оплату':'Готово',v=>rest?save('pay',{transfer_id:tr.id,amount:v.amount}):modal.close());return;
+    if(rest>0)return save('pay',{transfer_id:tr.id,full:true});
+    openDialog(`${esc(tr.sender_name)} → ${esc(tr.recipient_name)}`,`Всего ${money(tr.amount)}. Получено ${money(tr.paid)}.`,'<div class="hint">Перевод полностью оплачен.</div>'+button('Отменить последнюю отметку','undo',`data-id="${tr.id}"`,'text-button danger'),'Готово',()=>modal.close());return;
   }
   if(action==='undo')return confirmDialog('Отменить последнюю отметку?','Остаток перевода увеличится на сумму последней отмеченной оплаты.','Отменить отметку',()=>save('undo',{transfer_id:Number(id)}));
   if(action==='publish'){const g=t.publication||state.group;return confirmDialog('Опубликовать итог?',`В группе «${esc(g.title)}» появятся имена, стоимость участия и суммы переводов.`,'Опубликовать',()=>save('publish',{chat_id:g.chat_id,thread_id:g.thread_id}));}

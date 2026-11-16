@@ -14,8 +14,12 @@ def summary(store, owner, tid):
     lines = [header, "Участников: {}".format(len(members)),
              "Корт: {} · Воланы: {}".format(money(t["court_cost"]), money(shuttles)),
              "Всего: {}".format(money(result.total)), ""]
-    lines += ["{}: {}".format(p["name"], money(result.balances[p["person_id"]])) for p in members]
     transfers = store.transfers(tid)
+    balances = dict(result.balances)
+    for tr in transfers:
+        balances[tr["sender"]] -= tr["paid"]
+        balances[tr["recipient"]] += tr["paid"]
+    lines += ["{}: {}".format(p["name"], money(balances[p["person_id"]]) if balances[p["person_id"]] else "0") for p in members]
     payers = store.all("SELECT c.person_id,p.name FROM court_payments c JOIN people p ON p.id=c.person_id WHERE c.training_id=? AND c.amount>0", (tid,))
     lines.append("")
     if len(payers) == 1 and all(

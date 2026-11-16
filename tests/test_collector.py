@@ -110,3 +110,26 @@ class CollectorTests(unittest.TestCase):
         published = summary(self.s, 0, self.tid)
         self.assertIn('Переводить Андрей', published)
         self.assertNotIn('должен вернуть:', published)
+
+
+    def test_summary_balances_follow_payment_and_undo(self):
+        with self.s.db:
+            self.s.lock(0, self.tid)
+        incoming = next(tr for tr in self.s.transfers(self.tid) if tr['sender'] == self.b)
+        self.assertIn('Борис: 300.00 ฿', summary(self.s, 0, self.tid))
+        with self.s.db:
+            self.s.pay(0, incoming['id'], 10000)
+        self.assertIn('Борис: 200.00 ฿', summary(self.s, 0, self.tid))
+        with self.s.db:
+            self.s.pay(0, incoming['id'], 20000)
+        self.assertIn('Борис: 0\n', summary(self.s, 0, self.tid))
+        with self.s.db:
+            self.s.undo_payment(0, incoming['id'])
+        self.assertIn('Борис: 200.00 ฿', summary(self.s, 0, self.tid))
+        with self.s.db:
+            for tr in self.s.transfers(self.tid):
+                if tr['amount'] > tr['paid']:
+                    self.s.pay(0, tr['id'], tr['amount']-tr['paid'])
+        published = summary(self.s, 0, self.tid)
+        for name in ('Андрей', 'Мария', 'Борис'):
+            self.assertIn(name + ': 0\n', published)
