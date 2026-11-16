@@ -81,14 +81,30 @@ function trainingView(t){
     ${calc?button('Посмотреть расчёт →','preview','','full'):`<div class="hint warning">${esc(t.calculation_error)}</div><button class="full" disabled>Посмотреть расчёт →</button>`}`;
     html+=button('Удалить черновик','delete_draft','','text-button danger full');
   }else{
-    html+=calculationView(t);
-    html+=`<section class="card"><h2>Переводы</h2><p>Отмечайте деньги, которые уже получены.</p>${t.transfers.length?t.transfers.map(tr=>`<div class="transfer"><div class="row"><b>${esc(tr.sender_name)} → ${esc(tr.recipient_name)}</b><b class="amount">${money(tr.amount)}</b></div><p>${tr.paid===tr.amount?'✓ Оплачено полностью':`Получено ${money(tr.paid)} · остаток ${money(tr.amount-tr.paid)}`}</p><div class="progress"><progress value="${tr.paid}" max="${tr.amount}" aria-label="Оплачено"></progress></div>${t.status==='settling'?button(tr.paid===tr.amount?'Посмотреть оплату':'Оплатил','transfer',`data-id="${tr.id}"`,'secondary full'):''}</div>`).join(''):'<div class="hint">Все расходы уже распределены. Переводы не нужны.</div>'}</section>`;
+    html+=settlementView(t);
     const group=t.publication||state.group;
     html+=`<section class="card"><h2>Итог в группе</h2><p>${group?esc(group.title):'Сначала подключите группу в разделе «Группа».'}</p>${group?button(t.publication?'Обновить итог в группе':'Опубликовать итог','publish','','secondary full'):''}<small>Отметки оплат обновляют опубликованное сообщение автоматически.</small></section>`;
     if(t.status==='closed')html+=button('Открыть тренировку снова','reopen','','secondary full');
     else html+=`<div class="stack">${remaining===0?button('Закрыть тренировку ✓','close','','full'):`<div class="hint">Чтобы закрыть тренировку, отметьте оставшиеся ${money(remaining)}.</div>`}${button('Вернуть к редактированию','unlock','','text-button')}</div>`;
   }
   return html;
+}
+function settlementView(t){
+  const payer=t.payers.length===1?t.payers[0]:null;
+  const balances={...t.calculation.balances};
+  for(const tr of t.transfers){balances[tr.sender]-=tr.paid;balances[tr.recipient]+=tr.paid;}
+  const ids=new Set([...Object.keys(t.calculation.shares),...t.transfers.map(tr=>String(payer&&tr.sender===payer.person_id?tr.recipient:tr.sender))]);
+  const rows=[...ids].map(id=>{
+    const transfers=t.transfers.filter(tr=>String(payer&&tr.sender===payer.person_id?tr.recipient:tr.sender)===id);
+    const refund=payer&&transfers.some(tr=>tr.sender===payer.person_id);
+    const controls=t.status==='settling'?transfers.map(tr=>{
+      const paid=tr.paid===tr.amount;
+      return button(paid?'Отменить':refund?'Вернул':'Оплатил',paid?'undo':'transfer',`data-id="${tr.id}"`,'edit');
+    }).join(''):'';
+    const hint=refund?`Возврат от ${esc(payer.name)}`:payer&&Number(id)===payer.person_id?'Оплатил корт':!payer?transfers.map(tr=>`Переводить ${esc(tr.recipient_name)}`).join(', '):'';
+    return `<div class="settlement-row" data-person="${id}"><div class="settlement-name">${esc(t.names[id])}${hint?`<small>${hint}</small>`:''}</div><b class="amount">${money(balances[id]||0)}</b><div class="settlement-actions">${controls}</div></div>`;
+  }).join('');
+  return `<section class="card settlement"><h2>Стоимость участия</h2>${payer?`<p>Переводить ${esc(payer.name)}</p>`:''}${rows}</section>`;
 }
 function calculationView(t){const c=t.calculation;if(!c)return `<div class="hint warning">${esc(t.calculation_error)}</div>`;return `<section class="card"><h2>Стоимость участия</h2><div class="row breakdown"><span class="muted">Корт</span><span>${money(t.court_cost)}</span></div><div class="row breakdown"><span class="muted">Воланы</span><span>${money(c.total-t.court_cost)}</span></div>${Object.entries(c.shares).map(([id,amount])=>`<div class="row breakdown"><span>${esc(t.names[id])}<small class="balance-note">Баланс: ${money(c.balances[id])}</small></span><b class="amount">${money(amount)}</b></div>`).join('')}<small>Доли — по времени игры. Баланс учитывает воланы и оплату корта: плюс — доплатить, минус — получить. Направления переводов указаны ниже.</small></section>${(t.settlement_notes||[]).map(note=>`<div class="hint">${esc(note)}</div>`).join('')}`;}
 function openDialog(title,description,fields,submit,onSubmit){
@@ -149,12 +165,8 @@ function act(action,id,value){
   if(action==='preview'){
     openDialog('Проверим расчёт','После фиксации можно отмечать переводы.',calculationView(t)+`<h3>Кто кому переводит</h3>${t.calculation.transfers.map(tr=>`<div class="breakdown row"><span>${esc(t.names[tr.sender])} → ${esc(t.names[tr.recipient])}</span><b class="amount">${money(tr.amount)}</b></div>`).join('')||'<p>Переводы не нужны.</p>'}`,'Зафиксировать расчёт',()=>save('lock'));return;
   }
-  if(action==='transfer'){
-    const tr=t.transfers.find(x=>x.id===Number(id)), rest=tr.amount-tr.paid;
-    if(rest>0)return save('pay',{transfer_id:tr.id,full:true});
-    openDialog(`${esc(tr.sender_name)} → ${esc(tr.recipient_name)}`,`Всего ${money(tr.amount)}. Получено ${money(tr.paid)}.`,'<div class="hint">Перевод полностью оплачен.</div>'+button('Отменить последнюю отметку','undo',`data-id="${tr.id}"`,'text-button danger'),'Готово',()=>modal.close());return;
-  }
-  if(action==='undo')return confirmDialog('Отменить последнюю отметку?','Остаток перевода увеличится на сумму последней отмеченной оплаты.','Отменить отметку',()=>save('undo',{transfer_id:Number(id)}));
+  if(action==='transfer')return save('pay',{transfer_id:Number(id),full:true});
+  if(action==='undo')return save('undo',{transfer_id:Number(id)});
   if(action==='publish'){const g=t.publication||state.group;return confirmDialog('Опубликовать итог?',`В группе «${esc(g.title)}» появятся имена, стоимость участия и суммы переводов.`,'Опубликовать',()=>save('publish',{chat_id:g.chat_id,thread_id:g.thread_id}));}
   if(action==='delete_draft')return confirmDialog('Удалить черновик?',`Тренировка № ${t.id} · ${dateLabel(t.date)} · ${esc(t.location)} будет удалена вместе с составом и расходами. Отменить удаление нельзя. Справочники и голосование сохранятся. Старые сообщения в группе останутся.`,'Удалить черновик',()=>save('delete_draft'));
   if(action==='unlock')return confirmDialog('Вернуть к редактированию?','Сначала отмените все отметки оплат. Опубликованный расчёт будет помечен как неактуальный.','Вернуть к редактированию',()=>save('unlock'));
